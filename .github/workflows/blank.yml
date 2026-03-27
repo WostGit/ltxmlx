@@ -88,11 +88,14 @@ jobs:
           source .venv/bin/activate
           echo "=== Starting ultra-low LTX test ==="
 
-          if python - <<'PY'
+          HAS_LTX2_MODULE=0
+          python - <<'PY' && HAS_LTX2_MODULE=1 || true
           import importlib.util
-          raise SystemExit(0 if importlib.util.find_spec("mlx_video.models.ltx_2.generate") else 1)
+          if importlib.util.find_spec("mlx_video.models.ltx_2.generate") is None:
+              raise SystemExit(1)
           PY
-          then
+
+          if [ "$HAS_LTX2_MODULE" -eq 1 ]; then
             echo "Using python -m mlx_video.models.ltx_2.generate"
             python -m mlx_video.models.ltx_2.generate \
               --prompt "A simple red ball bouncing slowly on a white background" \
@@ -112,7 +115,6 @@ jobs:
               --output-path smoke_test.mp4 || true
           else
             echo "LTX entrypoint not present in installed mlx-video build."
-            echo "Installed package appears inconsistent with current docs/entrypoints."
             python - <<'PY'
             import pkgutil
             import mlx_video
