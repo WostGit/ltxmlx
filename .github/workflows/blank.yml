@@ -2,12 +2,16 @@ name: Test Ultra-Low LTX MLX (Smoke Test Only)
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   test-ltx-ultralow:
-    runs-on: macos-14   # ~7 GB unified memory. Use macos-14-xlarge for ~14 GB if available
+    runs-on: macos-14
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout repository
@@ -16,67 +20,65 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Install uv and dependencies
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Create venv and install dependencies
         run: |
-          pip install -U pip uv
-          # Create and activate venv to avoid uv system errors
-          uv venv .venv
+          python -m venv .venv
           source .venv/bin/activate
-          uv pip install --upgrade mlx mlx-video torch
-          # Alternative direct install from source (recommended for latest LTX support)
+          python -m pip install --upgrade pip
+
+          # Install MLX + PyTorch, then install mlx-video from GitHub
+          uv pip install mlx torch
           uv pip install git+https://github.com/Blaizzy/mlx-video.git
 
       - name: Log system and MLX info
         run: |
+          source .venv/bin/activate
+
           echo "=== System Memory ==="
           sysctl hw.memsize
           top -l 1 | head -n 15
-          echo "=== MLX & MPS Info ==="
-          python -c '
+
+          echo "=== Python / MLX / MPS Info ==="
+          python - <<'PY'
+          import sys
           import torch
           import mlx.core as mx
-          print("PyTorch MPS available:", torch.backends.mps.is_available())
-          print("MLX Metal device:", mx.metal.device_info() if hasattr(mx.metal, "device_info") else "N/A")
-          print("Available memory (rough):", "See top output above")
-          '
 
-      - name: Ultra-low LTX test (expect OOM / MPS cap)
+          print("Python:", sys.version)
+          print("PyTorch MPS available:", torch.backends.mps.is_available())
+          try:
+              print("MLX Metal device:", mx.metal.device_info())
+          except Exception as e:
+              print("MLX Metal device info unavailable:", e)
+          PY
+
+      - name: Ultra-low LTX smoke test
         continue-on-error: true
         run: |
           source .venv/bin/activate
-          echo "=== Starting ultra-low LTX test (256x256, 8 frames, 8 steps) ==="
-          python -c '
-          import mlx.core as mx
-          try:
-              # mlx-video LTX-2 distilled (smallest practical variant via the package)
-              from mlx_video.ltx_2 import generate as ltx_generate
-              print("Successfully imported mlx_video.ltx_2")
-              print("Attempting minimal generation (this will likely OOM)...")
-              
-              result = ltx_generate(
-                  prompt="A simple red ball bouncing slowly on white background",
-                  width=256,
-                  height=256,
-                  num_frames=8,      # Very short clip
-                  steps=8,           # Distilled minimum
-                  guidance_scale=1.0,
-                  seed=42
-              )
-              print("Generation unexpectedly succeeded!")
-              if hasattr(result, "shape"):
-                  print("Output shape:", result.shape)
-          except Exception as e:
-              print("Expected failure (OOM, MPS cap, or import issue):", str(e)[:500])
-          finally:
-              mx.clear_cache()
-              print("Cache cleared")
-          '
+
+          echo "=== Starting ultra-low LTX test ==="
+          echo "Using CLI/module entrypoint instead of importing internal functions"
+
+          python -m mlx_video.ltx_2.generate \
+            --prompt "A simple red ball bouncing slowly on a white background" \
+            --width 256 \
+            --height 256 \
+            --num-frames 9 \
+            --seed 42 \
+            --output smoke_test.mp4 || true
+
+          echo "=== Smoke test finished ==="
+          ls -lah || true
 
       - name: Final memory check
         if: always()
         run: |
           echo "=== Final Memory Summary ==="
           top -l 1 | head -n 20
-          echo "Test completed. As expected on 7 GB runner with video models."
+          echo "Workflow completed."
