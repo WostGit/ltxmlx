@@ -1,4 +1,4 @@
-name: Test Ultra-Low LTX-2B MLX on macOS Runner
+name: Test Ultra-Low LTX MLX (Smoke Test Only)
 
 on:
   push:
@@ -7,10 +7,10 @@ on:
 
 jobs:
   test-ltx-ultralow:
-    runs-on: macos-14   # Standard ~7 GB runner (try macos-14-xlarge if you have access for ~14 GB)
+    runs-on: macos-14   # ~7 GB unified memory. Use macos-14-xlarge for ~14 GB if available
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -18,56 +18,65 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install uv and dependencies
         run: |
           pip install -U pip uv
-          uv pip install mlx mlx-video torch  # mlx-video for LTX support; torch as fallback
-          # If mlx-video doesn't directly support 2B yet, you may need git install + custom pipeline
+          # Create and activate venv to avoid uv system errors
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install --upgrade mlx mlx-video torch
+          # Alternative direct install from source (recommended for latest LTX support)
+          uv pip install git+https://github.com/Blaizzy/mlx-video.git
 
-      - name: Log system resources
+      - name: Log system and MLX info
         run: |
-          echo "Total memory info:"
+          echo "=== System Memory ==="
           sysctl hw.memsize
-          echo "Available disk:"
-          df -h
-          python -c "
+          top -l 1 | head -n 15
+          echo "=== MLX & MPS Info ==="
+          python -c '
           import torch
           import mlx.core as mx
-          print('PyTorch MPS available:', torch.backends.mps.is_available())
-          print('MLX device info:', mx.metal.device_info() if hasattr(mx, 'metal') else 'No metal info')
-          "
-
-      - name: Ultra-low LTX test (expect OOM or MPS cap)
-        continue-on-error: true
-        run: |
-          echo "Running ultra-minimal LTX-2B distilled test..."
-          uv run python -c '
-          import mlx.core as mx
-          # Placeholder for mlx-video LTX-2B call (adapt based on actual API)
-          # If mlx-video supports it:
-          try:
-              from mlx_video import ltx_2b  # or whatever the import is for 2B
-              print("Model loading attempt...")
-              # Ultra-low params: 256x256, 8 frames, 8 steps, minimal everything
-              result = ltx_2b.generate(
-                  prompt="A simple red circle moving slowly",
-                  width=256,
-                  height=256,
-                  num_frames=8,
-                  steps=8,
-                  low_memory=True  # if flag exists
-              )
-              print("Generation succeeded! (unlikely)")
-              print("Output shape:", result.shape if hasattr(result, "shape") else "No shape")
-          except Exception as e:
-              print("Failed as expected:", str(e))
-          finally:
-              mx.clear_cache()  # or equivalent
-              print("Memory cleared attempt")
+          print("PyTorch MPS available:", torch.backends.mps.is_available())
+          print("MLX Metal device:", mx.metal.device_info() if hasattr(mx.metal, "device_info") else "N/A")
+          print("Available memory (rough):", "See top output above")
           '
 
-      - name: Memory usage summary (post-run)
+      - name: Ultra-low LTX test (expect OOM / MPS cap)
+        continue-on-error: true
+        run: |
+          source .venv/bin/activate
+          echo "=== Starting ultra-low LTX test (256x256, 8 frames, 8 steps) ==="
+          python -c '
+          import mlx.core as mx
+          try:
+              # mlx-video LTX-2 distilled (smallest practical variant via the package)
+              from mlx_video.ltx_2 import generate as ltx_generate
+              print("Successfully imported mlx_video.ltx_2")
+              print("Attempting minimal generation (this will likely OOM)...")
+              
+              result = ltx_generate(
+                  prompt="A simple red ball bouncing slowly on white background",
+                  width=256,
+                  height=256,
+                  num_frames=8,      # Very short clip
+                  steps=8,           # Distilled minimum
+                  guidance_scale=1.0,
+                  seed=42
+              )
+              print("Generation unexpectedly succeeded!")
+              if hasattr(result, "shape"):
+                  print("Output shape:", result.shape)
+          except Exception as e:
+              print("Expected failure (OOM, MPS cap, or import issue):", str(e)[:500])
+          finally:
+              mx.clear_cache()
+              print("Cache cleared")
+          '
+
+      - name: Final memory check
         if: always()
         run: |
-          echo "Final memory check (top -l 1):"
+          echo "=== Final Memory Summary ==="
           top -l 1 | head -n 20
+          echo "Test completed. As expected on 7 GB runner with video models."
