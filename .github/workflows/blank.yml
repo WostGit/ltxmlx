@@ -1,0 +1,73 @@
+name: Test Ultra-Low LTX-2B MLX on macOS Runner
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-ltx-ultralow:
+    runs-on: macos-14   # Standard ~7 GB runner (try macos-14-xlarge if you have access for ~14 GB)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -U pip uv
+          uv pip install mlx mlx-video torch  # mlx-video for LTX support; torch as fallback
+          # If mlx-video doesn't directly support 2B yet, you may need git install + custom pipeline
+
+      - name: Log system resources
+        run: |
+          echo "Total memory info:"
+          sysctl hw.memsize
+          echo "Available disk:"
+          df -h
+          python -c "
+          import torch
+          import mlx.core as mx
+          print('PyTorch MPS available:', torch.backends.mps.is_available())
+          print('MLX device info:', mx.metal.device_info() if hasattr(mx, 'metal') else 'No metal info')
+          "
+
+      - name: Ultra-low LTX test (expect OOM or MPS cap)
+        continue-on-error: true
+        run: |
+          echo "Running ultra-minimal LTX-2B distilled test..."
+          uv run python -c '
+          import mlx.core as mx
+          # Placeholder for mlx-video LTX-2B call (adapt based on actual API)
+          # If mlx-video supports it:
+          try:
+              from mlx_video import ltx_2b  # or whatever the import is for 2B
+              print("Model loading attempt...")
+              # Ultra-low params: 256x256, 8 frames, 8 steps, minimal everything
+              result = ltx_2b.generate(
+                  prompt="A simple red circle moving slowly",
+                  width=256,
+                  height=256,
+                  num_frames=8,
+                  steps=8,
+                  low_memory=True  # if flag exists
+              )
+              print("Generation succeeded! (unlikely)")
+              print("Output shape:", result.shape if hasattr(result, "shape") else "No shape")
+          except Exception as e:
+              print("Failed as expected:", str(e))
+          finally:
+              mx.clear_cache()  # or equivalent
+              print("Memory cleared attempt")
+          '
+
+      - name: Memory usage summary (post-run)
+        if: always()
+        run: |
+          echo "Final memory check (top -l 1):"
+          top -l 1 | head -n 20
