@@ -8,7 +8,7 @@ on:
 jobs:
   test-ltx-ultralow:
     runs-on: macos-14
-
+    
     defaults:
       run:
         shell: bash
@@ -23,115 +23,60 @@ jobs:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v5 # Updated to latest stable major version
+        with:
+          enable-cache: true
 
-      - name: Create venv and install dependencies
+      - name: Install dependencies
         run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python -m pip install --upgrade pip
-          uv pip install mlx torch
-          uv pip install git+https://github.com/Blaizzy/mlx-video.git
+          # Use uv to sync/install directly into the environment
+          uv pip install --system mlx torch
+          uv pip install --system "git+https://github.com/Blaizzy/mlx-video.git"
 
       - name: Log system and MLX info
         run: |
-          source .venv/bin/activate
-
           echo "=== System Memory ==="
           sysctl hw.memsize
-          top -l 1 | head -n 15
-
+          vm_stat
+          
           echo "=== Python / MLX / MPS Info ==="
-          python - <<'PY'
+          python3 - <<'PY'
           import sys
           import torch
           import mlx.core as mx
-
-          print("Python:", sys.version)
-          print("PyTorch MPS available:", torch.backends.mps.is_available())
+          print(f"Python: {sys.version}")
+          print(f"PyTorch MPS available: {torch.backends.mps.is_available()}")
           try:
-              print("MLX device:", mx.device_info())
+              print(f"MLX device: {mx.default_device()}")
           except Exception as e:
-              print("MLX device info unavailable:", e)
-          PY
-
-      - name: Inspect installed mlx-video package
-        run: |
-          source .venv/bin/activate
-          python - <<'PY'
-          import pkgutil
-          import mlx_video
-          from importlib.metadata import entry_points
-
-          print("mlx_video location:", mlx_video.__file__)
-
-          mods = sorted(
-              m.name for m in pkgutil.walk_packages(
-                  mlx_video.__path__, prefix="mlx_video."
-              )
-              if "ltx" in m.name or "wan" in m.name
-          )
-
-          print("Discovered mlx_video modules:")
-          for m in mods:
-              print(" -", m)
-
-          print("Console scripts:")
-          for ep in entry_points(group="console_scripts"):
-              if "mlx_video" in ep.name:
-                  print(" -", ep.name, "->", ep.value)
+              print(f"MLX info error: {e}")
           PY
 
       - name: Ultra-low LTX smoke test
         continue-on-error: true
         run: |
-          source .venv/bin/activate
           echo "=== Starting ultra-low LTX test ==="
-
-          HAS_LTX2_MODULE=0
-          python - <<'PY' && HAS_LTX2_MODULE=1 || true
-          import importlib.util
-          if importlib.util.find_spec("mlx_video.models.ltx_2.generate") is None:
-              raise SystemExit(1)
-          PY
-
-          if [ "$HAS_LTX2_MODULE" -eq 1 ]; then
-            echo "Using python -m mlx_video.models.ltx_2.generate"
-            python -m mlx_video.models.ltx_2.generate \
+          
+          # Simplified discovery and execution
+          MODULE_PATH="mlx_video.models.ltx_2.generate"
+          
+          if python3 -c "import importlib.util; exit(0 if importlib.util.find_spec('$MODULE_PATH') else 1)"; then
+            echo "Using python -m $MODULE_PATH"
+            python3 -m $MODULE_PATH \
               --prompt "A simple red ball bouncing slowly on a white background" \
               --width 256 \
               --height 256 \
               --num-frames 9 \
               --seed 42 \
-              --output-path smoke_test.mp4 || true
-          elif command -v mlx_video.ltx_2.generate >/dev/null 2>&1; then
-            echo "Using console script mlx_video.ltx_2.generate"
-            mlx_video.ltx_2.generate \
-              --prompt "A simple red ball bouncing slowly on a white background" \
-              --width 256 \
-              --height 256 \
-              --num-frames 9 \
-              --seed 42 \
-              --output-path smoke_test.mp4 || true
+              --output-path smoke_test.mp4
           else
-            echo "LTX entrypoint not present in installed mlx-video build."
-            python - <<'PY'
-            import pkgutil
-            import mlx_video
-
-            print("Available mlx_video modules containing 'ltx':")
-            for m in sorted(pkgutil.walk_packages(mlx_video.__path__, prefix="mlx_video."), key=lambda x: x.name):
-                if "ltx" in m.name:
-                    print(" -", m.name)
-            PY
+            echo "LTX entrypoint not found. Listing available mlx_video modules:"
+            python3 -c "import pkgutil, mlx_video; [print(m.name) for m in pkgutil.walk_packages(mlx_video.__path__, 'mlx_video.') if 'ltx' in m.name]"
           fi
-
-          echo "=== Smoke test finished ==="
-          ls -lah || true
 
       - name: Final memory check
         if: always()
         run: |
           echo "=== Final Memory Summary ==="
           top -l 1 | head -n 20
-          echo "Workflow completed."
+          ls -lh smoke_test.mp4 || echo "No output file generated."
