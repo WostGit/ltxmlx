@@ -30,8 +30,6 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-
-          # Install MLX + PyTorch, then install mlx-video from GitHub
           uv pip install mlx torch
           uv pip install git+https://github.com/Blaizzy/mlx-video.git
 
@@ -52,26 +50,79 @@ jobs:
           print("Python:", sys.version)
           print("PyTorch MPS available:", torch.backends.mps.is_available())
           try:
-              print("MLX Metal device:", mx.metal.device_info())
+              print("MLX device:", mx.device_info())
           except Exception as e:
-              print("MLX Metal device info unavailable:", e)
+              print("MLX device info unavailable:", e)
+          PY
+
+      - name: Inspect installed mlx-video package
+        run: |
+          source .venv/bin/activate
+          python - <<'PY'
+          import pkgutil
+          import mlx_video
+          from importlib.metadata import entry_points
+
+          print("mlx_video location:", mlx_video.__file__)
+
+          mods = sorted(
+              m.name for m in pkgutil.walk_packages(
+                  mlx_video.__path__, prefix="mlx_video."
+              )
+              if "ltx" in m.name or "wan" in m.name
+          )
+
+          print("Discovered mlx_video modules:")
+          for m in mods:
+              print(" -", m)
+
+          print("Console scripts:")
+          for ep in entry_points(group="console_scripts"):
+              if "mlx_video" in ep.name:
+                  print(" -", ep.name, "->", ep.value)
           PY
 
       - name: Ultra-low LTX smoke test
         continue-on-error: true
         run: |
           source .venv/bin/activate
-
           echo "=== Starting ultra-low LTX test ==="
-          echo "Using CLI/module entrypoint instead of importing internal functions"
 
-          python -m mlx_video.ltx_2.generate \
-            --prompt "A simple red ball bouncing slowly on a white background" \
-            --width 256 \
-            --height 256 \
-            --num-frames 9 \
-            --seed 42 \
-            --output smoke_test.mp4 || true
+          if python - <<'PY'
+          import importlib.util
+          raise SystemExit(0 if importlib.util.find_spec("mlx_video.models.ltx_2.generate") else 1)
+          PY
+          then
+            echo "Using python -m mlx_video.models.ltx_2.generate"
+            python -m mlx_video.models.ltx_2.generate \
+              --prompt "A simple red ball bouncing slowly on a white background" \
+              --width 256 \
+              --height 256 \
+              --num-frames 9 \
+              --seed 42 \
+              --output-path smoke_test.mp4 || true
+          elif command -v mlx_video.ltx_2.generate >/dev/null 2>&1; then
+            echo "Using console script mlx_video.ltx_2.generate"
+            mlx_video.ltx_2.generate \
+              --prompt "A simple red ball bouncing slowly on a white background" \
+              --width 256 \
+              --height 256 \
+              --num-frames 9 \
+              --seed 42 \
+              --output-path smoke_test.mp4 || true
+          else
+            echo "LTX entrypoint not present in installed mlx-video build."
+            echo "Installed package appears inconsistent with current docs/entrypoints."
+            python - <<'PY'
+            import pkgutil
+            import mlx_video
+
+            print("Available mlx_video modules containing 'ltx':")
+            for m in sorted(pkgutil.walk_packages(mlx_video.__path__, prefix="mlx_video."), key=lambda x: x.name):
+                if "ltx" in m.name:
+                    print(" -", m.name)
+            PY
+          fi
 
           echo "=== Smoke test finished ==="
           ls -lah || true
